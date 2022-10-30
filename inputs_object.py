@@ -27,8 +27,8 @@ def dataset_reader(filename_queue, config):  # prev name: CamVid_reader
     label_filename = filename_queue[1]  # tensor of type string
 
     # get png encoded image
-    imageValue = tf.read_file(image_filename)
-    labelValue = tf.read_file(label_filename)
+    imageValue = tf.io.read_file(image_filename)
+    labelValue = tf.io.read_file(label_filename)
 
     # decodes a png image into a uint8 or uint16 tensor
     # returns a tensor of type dtype with shape [height, width, depth]
@@ -45,7 +45,7 @@ def dataset_inputs(image_filenames, label_filenames, batch_size, config):
     images = ops.convert_to_tensor(image_filenames, dtype=dtypes.string)
     labels = ops.convert_to_tensor(label_filenames, dtype=dtypes.string)
 
-    filename_queue = tf.train.slice_input_producer([images, labels], shuffle=True)
+    filename_queue = tf.compat.v1.train.slice_input_producer([images, labels], shuffle=True)
 
     image, label = dataset_reader(filename_queue, config)
     reshaped_image = tf.cast(image, tf.float32)
@@ -79,21 +79,21 @@ def _generate_image_and_label_batch(image, label, min_queue_examples,
     # TODO: test if setting threads to higher number!
     num_preprocess_threads = 1
     if shuffle:
-        images, label_batch = tf.train.shuffle_batch(
+        images, label_batch = tf.compat.v1.train.shuffle_batch(
             [image, label],
             batch_size=batch_size,
             num_threads=num_preprocess_threads,
             capacity=min_queue_examples + 3 * batch_size,
             min_after_dequeue=min_queue_examples)
     else:
-        images, label_batch = tf.train.batch(
+        images, label_batch = tf.compat.v1.train.batch(
             [image, label],
             batch_size=batch_size,
             num_threads=num_preprocess_threads,
             capacity=min_queue_examples + 3 * batch_size)
 
     # Display the training images in the visualizer.
-    tf.summary.image('training_images', images)
+    tf.compat.v1.summary.image('training_images', images)
     print('generating image and label batch:')
     return images, label_batch
 

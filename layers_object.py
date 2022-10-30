@@ -9,10 +9,10 @@ import math
 
 
 def max_pool(inputs, name):
-    with tf.variable_scope(name) as scope:
-        value, index = tf.nn.max_pool_with_argmax(tf.to_double(inputs), ksize=[1, 2, 2, 1], strides=[1, 2, 2, 1],
+    with tf.compat.v1.variable_scope(name) as scope:
+        value, index = tf.nn.max_pool_with_argmax(tf.cast(inputs, dtype=tf.float64), ksize=[1, 2, 2, 1], strides=[1, 2, 2, 1],
                                                   padding='SAME', name=scope.name)
-    return tf.to_float(value), index, inputs.get_shape().as_list()
+    return tf.cast(value, dtype=tf.float32), index, inputs.get_shape().as_list()
     # here value is the max value, index is the corresponding index, the detail information is here
     # https://www.tensorflow.org/versions/r1.0/api_docs/python/tf/nn/max_pool_with_argmax
 
@@ -38,33 +38,34 @@ def conv_layer(bottom, name, shape, is_training, use_vgg=False, vgg_param_dict=N
         return vgg_param_dict[val_name][1]
         # here load the bias for VGG-16, the bias size will be 64,128,256,512,512, also shown in function vgg_param_load
 
-    with tf.variable_scope(name) as scope:
+    with tf.compat.v1.variable_scope(name) as scope:
         if use_vgg:
-            init = tf.constant_initializer(get_conv_filter(scope.name))
+            init = tf.compat.v1.constant_initializer(get_conv_filter(scope.name))
             filt = variable_with_weight_decay('weights', initializer=init, shape=shape, wd=False)
         else:
             filt = variable_with_weight_decay('weights', initializer=initialization(shape[0], shape[2]),
                                               shape=shape, wd=False)
-        tf.summary.histogram(scope.name + "weight", filt)
-        conv = tf.nn.conv2d(bottom, filt, [1, 1, 1, 1], padding='SAME')
+        tf.compat.v1.summary.histogram(scope.name + "weight", filt)
+        conv = tf.nn.conv2d(input=bottom, filters=filt, strides=[1, 1, 1, 1], padding='SAME')
         if use_vgg:
-            conv_biases_init = tf.constant_initializer(get_biases(scope.name))
+            conv_biases_init = tf.compat.v1.constant_initializer(get_biases(scope.name))
             conv_biases = variable_with_weight_decay('biases_1', initializer=conv_biases_init, shape=shape[3], wd=False)
         else:
-            conv_biases = variable_with_weight_decay('biases', initializer=tf.constant_initializer(0.0),
+            conv_biases = variable_with_weight_decay('biases', initializer=tf.compat.v1.constant_initializer(0.0),
                                                      shape=shape[3],
                                                      wd=False)
-        tf.summary.histogram(scope.name + "bias", conv_biases)
+        tf.compat.v1.summary.histogram(scope.name + "bias", conv_biases)
         bias = tf.nn.bias_add(conv, conv_biases)
         conv_out = tf.nn.relu(batch_norm(bias, is_training, scope))
     return conv_out
 
 
 def batch_norm(bias_input, is_training, scope):
-    with tf.variable_scope(scope.name) as scope:
-        return tf.cond(is_training,
-                       lambda: tf.contrib.layers.batch_norm(bias_input, is_training=True, center=False, scope=scope),
-                       lambda: tf.contrib.layers.batch_norm(bias_input, is_training=False,center=False, reuse = True, scope=scope))
+    layer = tf.keras.layers.BatchNormalization(center=False)
+    with tf.compat.v1.variable_scope(scope.name) as scope:
+        return tf.cond(pred=is_training,
+                       true_fn=lambda: layer(training=True, inputs=bias_input),
+                       false_fn=lambda: layer(training=False, inputs=bias_input))
 #is_training = True, it will accumulate the statistics of the movements into moving_mean and moving_variance. When it's
 #not in a training mode, then it would use the values of the moving_mean, and moving_variance.
 #shadow_variable = decay * shadow_variable + (1 - decay) * variable, shadow_variable, I think it's the accumulated moving
@@ -83,9 +84,9 @@ def up_sampling(pool, ind, output_shape, batch_size, name=None):
            unpool:    unpooling tensor
            :param batch_size:
     """
-    with tf.variable_scope(name):
+    with tf.compat.v1.variable_scope(name):
         pool_ = tf.reshape(pool, [-1])
-        batch_range = tf.reshape(tf.range(batch_size, dtype=ind.dtype), [tf.shape(pool)[0], 1, 1, 1])
+        batch_range = tf.reshape(tf.range(batch_size, dtype=ind.dtype), [tf.shape(input=pool)[0], 1, 1, 1])
         b = tf.ones_like(ind) * batch_range
         b = tf.reshape(b, [-1, 1])
         ind_ = tf.reshape(ind, [-1, 1])
@@ -96,7 +97,7 @@ def up_sampling(pool, ind, output_shape, batch_size, name=None):
         # The usage for tf.scatter_nd is that: create a new tensor by applying sparse UPDATES(which is the pooling value) to individual values of slices within a
         # zero tensor of given shape (FLAT_OUTPUT_SHAPE) according to the indices (ind_). If we ues the orignal code, the only thing we need to change is: changeing
         # from tf.sparse_tensor_to_dense(sparse_tensor) to tf.sparse_add(tf.zeros((output_sahpe)),sparse_tensor) which will give us the gradients!!!
-        ret = tf.reshape(ret, [tf.shape(pool)[0], output_shape[1], output_shape[2], output_shape[3]])
+        ret = tf.reshape(ret, [tf.shape(input=pool)[0], output_shape[1], output_shape[2], output_shape[3]])
         return ret
 
 
@@ -111,7 +112,7 @@ def initialization(k, c):
     The initialized weight
     """
     std = math.sqrt(2. / (k ** 2 * c))
-    return tf.truncated_normal_initializer(stddev=std)
+    return tf.compat.v1.truncated_normal_initializer(stddev=std)
 
 
 def variable_with_weight_decay(name, initializer, shape, wd):
@@ -122,9 +123,9 @@ def variable_with_weight_decay(name, initializer, shape, wd):
     Inputs: wd is utilized to notify if weight decay is utilized
     Return: variable tensor
     """
-    var = tf.get_variable(name, shape, initializer=initializer)
+    var = tf.compat.v1.get_variable(name, shape, initializer=initializer)
     if wd is True:
         weight_decay = tf.multiply(tf.nn.l2_loss(var), wd, name='weight_loss')
-        tf.add_to_collection('losses', weight_decay)
+        tf.compat.v1.add_to_collection('losses', weight_decay)
     # tf.nn.l2_loss is utilized to compute half L2 norm of a tensor without the sqrt output = sum(t**2)/2
     return var

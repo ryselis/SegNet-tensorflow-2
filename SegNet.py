@@ -6,7 +6,8 @@ import numpy as np
 import random
 from layers_object import conv_layer, up_sampling, max_pool, initialization, \
     variable_with_weight_decay
-from evaluation_object import cal_loss, normal_loss, per_class_acc, get_hist, print_hist_summary, train_op, MAX_VOTE, var_calculate
+from evaluation_object import cal_loss, normal_loss, per_class_acc, get_hist, print_hist_summary, train_op, MAX_VOTE, \
+    var_calculate
 from inputs_object import get_filename_list, dataset_inputs, get_all_test_data
 from drawings_object import draw_plots_bayes, draw_plots_bayes_external
 from scipy import misc
@@ -53,13 +54,13 @@ class SegNet:
 
         self.graph = tf.Graph()
         with self.graph.as_default():
-            self.sess = tf.Session()
-            self.batch_size_pl = tf.placeholder(tf.int64, shape=[], name="batch_size")
-            self.is_training_pl = tf.placeholder(tf.bool, name="is_training")
-            self.with_dropout_pl = tf.placeholder(tf.bool, name="with_dropout")
-            self.keep_prob_pl = tf.placeholder(tf.float32, shape=None, name="keep_rate")
-            self.inputs_pl = tf.placeholder(tf.float32, [None, self.input_h, self.input_w, self.input_c])
-            self.labels_pl = tf.placeholder(tf.int64, [None, self.input_h, self.input_w, 1])
+            self.sess = tf.compat.v1.Session()
+            self.batch_size_pl = tf.compat.v1.placeholder(tf.int64, shape=[], name="batch_size")
+            self.is_training_pl = tf.compat.v1.placeholder(tf.bool, name="is_training")
+            self.with_dropout_pl = tf.compat.v1.placeholder(tf.bool, name="with_dropout")
+            self.keep_prob_pl = tf.compat.v1.placeholder(tf.float32, shape=None, name="keep_rate")
+            self.inputs_pl = tf.compat.v1.placeholder(tf.float32, [None, self.input_h, self.input_w, self.input_c])
+            self.labels_pl = tf.compat.v1.placeholder(tf.int64, [None, self.input_h, self.input_w, 1])
 
             # Before enter the images into the architecture, we need to do Local Contrast Normalization
             # But it seems a bit complicated, so we use Local Response Normalization which implement in Tensorflow
@@ -90,8 +91,8 @@ class SegNet:
 
             # Fourth box of convolution layer(10)
             if self.bayes:
-                self.dropout1 = tf.layers.dropout(self.pool3, rate=(1 - self.keep_prob_pl),
-                                                  training=self.with_dropout_pl, name="dropout1")
+                self.dropout1 = tf.compat.v1.layers.dropout(self.pool3, rate=(1 - self.keep_prob_pl),
+                                                            training=self.with_dropout_pl, name="dropout1")
                 self.conv4_1 = conv_layer(self.dropout1, "conv4_1", [3, 3, 256, 512], self.is_training_pl, self.use_vgg,
                                           self.vgg_param_dict)
             else:
@@ -105,8 +106,8 @@ class SegNet:
 
             # Fifth box of convolution layers(13)
             if self.bayes:
-                self.dropout2 = tf.layers.dropout(self.pool4, rate=(1 - self.keep_prob_pl),
-                                                  training=self.with_dropout_pl, name="dropout2")
+                self.dropout2 = tf.compat.v1.layers.dropout(self.pool4, rate=(1 - self.keep_prob_pl),
+                                                            training=self.with_dropout_pl, name="dropout2")
                 self.conv5_1 = conv_layer(self.dropout2, "conv5_1", [3, 3, 512, 512], self.is_training_pl, self.use_vgg,
                                           self.vgg_param_dict)
             else:
@@ -123,8 +124,8 @@ class SegNet:
 
             # First box of deconvolution layers(3)
             if self.bayes:
-                self.dropout3 = tf.layers.dropout(self.pool5, rate=(1 - self.keep_prob_pl),
-                                                  training=self.with_dropout_pl, name="dropout3")
+                self.dropout3 = tf.compat.v1.layers.dropout(self.pool5, rate=(1 - self.keep_prob_pl),
+                                                            training=self.with_dropout_pl, name="dropout3")
                 self.deconv5_1 = up_sampling(self.dropout3, self.pool5_index, self.shape_5, self.batch_size_pl,
                                              name="unpool_5")
             else:
@@ -135,8 +136,8 @@ class SegNet:
             self.deconv5_4 = conv_layer(self.deconv5_3, "deconv5_4", [3, 3, 512, 512], self.is_training_pl)
             # Second box of deconvolution layers(6)
             if self.bayes:
-                self.dropout4 = tf.layers.dropout(self.deconv5_4, rate=(1 - self.keep_prob_pl),
-                                                  training=self.with_dropout_pl, name="dropout4")
+                self.dropout4 = tf.compat.v1.layers.dropout(self.deconv5_4, rate=(1 - self.keep_prob_pl),
+                                                            training=self.with_dropout_pl, name="dropout4")
                 self.deconv4_1 = up_sampling(self.dropout4, self.pool4_index, self.shape_4, self.batch_size_pl,
                                              name="unpool_4")
             else:
@@ -147,8 +148,8 @@ class SegNet:
             self.deconv4_4 = conv_layer(self.deconv4_3, "deconv4_4", [3, 3, 512, 256], self.is_training_pl)
             # Third box of deconvolution layers(9)
             if self.bayes:
-                self.dropout5 = tf.layers.dropout(self.deconv4_4, rate=(1 - self.keep_prob_pl),
-                                                  training=self.with_dropout_pl, name="dropout5")
+                self.dropout5 = tf.compat.v1.layers.dropout(self.deconv4_4, rate=(1 - self.keep_prob_pl),
+                                                            training=self.with_dropout_pl, name="dropout5")
                 self.deconv3_1 = up_sampling(self.dropout5, self.pool3_index, self.shape_3, self.batch_size_pl,
                                              name="unpool_3")
             else:
@@ -159,8 +160,8 @@ class SegNet:
             self.deconv3_4 = conv_layer(self.deconv3_3, "deconv3_4", [3, 3, 256, 128], self.is_training_pl)
             # Fourth box of deconvolution layers(11)
             if self.bayes:
-                self.dropout6 = tf.layers.dropout(self.deconv3_4, rate=(1 - self.keep_prob_pl),
-                                                  training=self.with_dropout_pl, name="dropout6")
+                self.dropout6 = tf.compat.v1.layers.dropout(self.deconv3_4, rate=(1 - self.keep_prob_pl),
+                                                            training=self.with_dropout_pl, name="dropout6")
                 self.deconv2_1 = up_sampling(self.dropout6, self.pool2_index, self.shape_2, self.batch_size_pl,
                                              name="unpool_2")
             else:
@@ -174,11 +175,12 @@ class SegNet:
             self.deconv1_2 = conv_layer(self.deconv1_1, "deconv1_2", [3, 3, 64, 64], self.is_training_pl)
             self.deconv1_3 = conv_layer(self.deconv1_2, "deconv1_3", [3, 3, 64, 64], self.is_training_pl)
 
-            with tf.variable_scope('conv_classifier') as scope:
+            with tf.compat.v1.variable_scope('conv_classifier') as scope:
                 self.kernel = variable_with_weight_decay('weights', initializer=initialization(1, 64),
                                                          shape=[1, 1, 64, self.num_classes], wd=False)
-                self.conv = tf.nn.conv2d(self.deconv1_3, self.kernel, [1, 1, 1, 1], padding='SAME')
-                self.biases = variable_with_weight_decay('biases', tf.constant_initializer(0.0),
+                self.conv = tf.nn.conv2d(input=self.deconv1_3, filters=self.kernel, strides=[1, 1, 1, 1],
+                                         padding='SAME')
+                self.biases = variable_with_weight_decay('biases', tf.compat.v1.constant_initializer(0.0),
                                                          shape=[self.num_classes], wd=False)
                 self.logits = tf.nn.bias_add(self.conv, self.biases, name=scope.name)
 
@@ -186,10 +188,10 @@ class SegNet:
         from tensorflow.python.tools.inspect_checkpoint import print_tensors_in_checkpoint_file
         print_tensors_in_checkpoint_file(res_file, None, False)
         with self.graph.as_default():
-            for v in tf.global_variables():
+            for v in tf.compat.v1.global_variables():
                 print(v)
             if self.saver is None:
-                self.saver = tf.train.Saver(tf.global_variables())
+                self.saver = tf.compat.v1.train.Saver(tf.compat.v1.global_variables())
             self.saver.restore(self.sess, res_file)
 
     def train(self, max_steps=30001, batch_size=3):
@@ -205,21 +207,20 @@ class SegNet:
                 self.images_val, self.labels_val = dataset_inputs(val_image_filename, val_label_filename, batch_size,
                                                                   self.config)
 
-            loss, accuracy, prediction = cal_loss(logits=self.logits, labels=self.labels_pl,
-                                                     number_class=self.num_classes)
+            loss, accuracy, prediction = cal_loss(logits=self.logits, labels=self.labels_pl)
             train, global_step = train_op(total_loss=loss, opt=self.opt)
 
-            summary_op = tf.summary.merge_all()
+            summary_op = tf.compat.v1.summary.merge_all()
 
             with self.sess.as_default():
-                self.sess.run(tf.local_variables_initializer())
-                self.sess.run(tf.global_variables_initializer())
+                self.sess.run(tf.compat.v1.local_variables_initializer())
+                self.sess.run(tf.compat.v1.global_variables_initializer())
 
                 coord = tf.train.Coordinator()
-                threads = tf.train.start_queue_runners(coord=coord)
+                threads = tf.compat.v1.train.start_queue_runners(coord=coord)
                 # The queue runners basic reference:
                 # https://www.tensorflow.org/versions/r0.12/how_tos/threading_and_queues
-                train_writer = tf.summary.FileWriter(self.tb_logs, self.sess.graph)
+                train_writer = tf.compat.v1.summary.FileWriter(self.tb_logs, self.sess.graph)
                 for step in range(max_steps):
                     image_batch, label_batch = self.sess.run([self.images_tr, self.labels_tr])
                     feed_dict = {self.inputs_pl: image_batch,
@@ -234,17 +235,19 @@ class SegNet:
                     self.train_loss.append(_loss)
                     self.train_accuracy.append(_accuracy)
                     print("Iteration {}: Train Loss{:6.3f}, Train Accu {:6.3f}".format(step, self.train_loss[-1],
-                                                                                       self.train_accuracy[-1]))
+                                                                                       self.train_accuracy[-1]),
+                          end='\r', flush=True)
 
                     if step % 100 == 0:
-                        conv_classifier = self.sess.run(self.logits, feed_dict=feed_dict)
-                        print('per_class accuracy by logits in training time',
-                              per_class_acc(conv_classifier, label_batch, self.num_classes))
+                        # print()
+                        # conv_classifier = self.sess.run(self.logits, feed_dict=feed_dict)
+                        # print('per_class accuracy by logits in training time',
+                        #       per_class_acc(conv_classifier, label_batch, self.num_classes))
                         # per_class_acc is a function from utils
                         train_writer.add_summary(summary, step)
 
                     if step % 1000 == 0:
-                        print("start validating.......")
+                        print("\nstart validating.......")
                         _val_loss = []
                         _val_acc = []
                         hist = np.zeros((self.num_classes, self.num_classes))
@@ -278,9 +281,8 @@ class SegNet:
                 coord.request_stop()
                 coord.join(threads)
 
-                
-    def visual_results(self, dataset_type = "TEST", images_index = 3, FLAG_MAX_VOTE = False):
-        
+    def visual_results(self, dataset_type="TEST", images_index=3, FLAG_MAX_VOTE=False):
+
         image_w = self.config["INPUT_WIDTH"]
         image_h = self.config["INPUT_HEIGHT"]
         image_c = self.config["INPUT_CHANNELS"]
@@ -288,107 +290,106 @@ class SegNet:
         FLAG_BAYES = self.config["BAYES"]
 
         with self.sess as sess:
-            
+
             # Restore saved session
-            saver = tf.train.Saver()
+            saver = tf.compat.v1.train.Saver()
             saver.restore(sess, train_dir)
-            
+
             _, _, prediction = cal_loss(logits=self.logits,
                                         labels=self.labels_pl)
-            prob = tf.nn.softmax(self.logits,dim = -1)
-            
-            if (dataset_type=='TRAIN'):
+            prob = tf.nn.softmax(self.logits, axis=-1)
+
+            if (dataset_type == 'TRAIN'):
                 test_type_path = self.config["TRAIN_FILE"]
                 if type(images_index) == list:
                     indexes = images_index
                 else:
-                    indexes = random.sample(range(367),images_index)
-                #indexes = [0,75,150,225,300]
-            elif (dataset_type=='VAL'):
+                    indexes = random.sample(range(367), images_index)
+                # indexes = [0,75,150,225,300]
+            elif (dataset_type == 'VAL'):
                 test_type_path = self.config["VAL_FILE"]
                 if type(images_index) == list:
                     indexes = images_index
                 else:
-                    indexes = random.sample(range(101),images_index)
-                #indexes = [0,25,50,75,100]
-            elif (dataset_type=='TEST'):
+                    indexes = random.sample(range(101), images_index)
+                # indexes = [0,25,50,75,100]
+            elif (dataset_type == 'TEST'):
                 test_type_path = self.config["TEST_FILE"]
                 if type(images_index) == list:
                     indexes = images_index
                 else:
-                    indexes = random.sample(range(233),images_index)
-                #indexes = [0,50,100,150,200]
+                    indexes = random.sample(range(233), images_index)
+                # indexes = [0,50,100,150,200]
 
             # Load images
-            image_filename,label_filename = get_filename_list(test_type_path, self.config)
-            images, labels = get_all_test_data(image_filename,label_filename)
+            image_filename, label_filename = get_filename_list(test_type_path, self.config)
+            images, labels = get_all_test_data(image_filename, label_filename)
 
             # Keep images subset of length images_index
             images = [images[i] for i in indexes]
             labels = [labels[i] for i in indexes]
-            
+
             num_sample_generate = 30
             pred_tot = []
             var_tot = []
-            
-            for image_batch, label_batch in zip(images,labels):
-                
-                image_batch = np.reshape(image_batch,[1,image_h,image_w,image_c])
-                label_batch = np.reshape(label_batch,[1,image_h,image_w,1])
-                
+
+            for image_batch, label_batch in zip(images, labels):
+
+                image_batch = np.reshape(image_batch, [1, image_h, image_w, image_c])
+                label_batch = np.reshape(label_batch, [1, image_h, image_w, 1])
+
                 if FLAG_BAYES is False:
                     fetches = [prediction]
-                    feed_dict = {self.inputs_pl: image_batch, 
-                                 self.labels_pl: label_batch, 
-                                 self.is_training_pl: False, 
+                    feed_dict = {self.inputs_pl: image_batch,
+                                 self.labels_pl: label_batch,
+                                 self.is_training_pl: False,
                                  self.keep_prob_pl: 0.5,
                                  self.batch_size_pl: 1}
-                    pred = sess.run(fetches = fetches, feed_dict = feed_dict)
-                    pred = np.reshape(pred,[image_h,image_w])
+                    pred = sess.run(fetches=fetches, feed_dict=feed_dict)
+                    pred = np.reshape(pred, [image_h, image_w])
                     var_one = []
                 else:
-                    feed_dict = {self.inputs_pl: image_batch, 
-                                 self.labels_pl: label_batch, 
-                                 self.is_training_pl: False, 
+                    feed_dict = {self.inputs_pl: image_batch,
+                                 self.labels_pl: label_batch,
+                                 self.is_training_pl: False,
                                  self.keep_prob_pl: 0.5,
                                  self.with_dropout_pl: True,
                                  self.batch_size_pl: 1}
                     prob_iter_tot = []
                     pred_iter_tot = []
                     for iter_step in range(num_sample_generate):
-                        prob_iter_step = sess.run(fetches = [prob], feed_dict = feed_dict) 
+                        prob_iter_step = sess.run(fetches=[prob], feed_dict=feed_dict)
                         prob_iter_tot.append(prob_iter_step)
-                        pred_iter_tot.append(np.reshape(np.argmax(prob_iter_step,axis = -1),[-1]))
-                        
+                        pred_iter_tot.append(np.reshape(np.argmax(prob_iter_step, axis=-1), [-1]))
+
                     if FLAG_MAX_VOTE is True:
-                        prob_variance,pred = MAX_VOTE(pred_iter_tot,prob_iter_tot,self.config["NUM_CLASSES"])
-                        #acc_per = np.mean(np.equal(pred,np.reshape(label_batch,[-1])))
-                        var_one = var_calculate(pred,prob_variance)
-                        pred = np.reshape(pred,[image_h,image_w])
+                        prob_variance, pred = MAX_VOTE(pred_iter_tot, prob_iter_tot, self.config["NUM_CLASSES"])
+                        # acc_per = np.mean(np.equal(pred,np.reshape(label_batch,[-1])))
+                        var_one = var_calculate(pred, prob_variance)
+                        pred = np.reshape(pred, [image_h, image_w])
                     else:
-                        prob_mean = np.nanmean(prob_iter_tot,axis = 0)
-                        prob_variance = np.var(prob_iter_tot, axis = 0)
-                        pred = np.reshape(np.argmax(prob_mean,axis = -1),[-1]) #pred is the predicted label with the mean of generated samples
-                        #THIS TIME I DIDN'T INCLUDE TAU
-                        var_one = var_calculate(pred,prob_variance)
-                        pred = np.reshape(pred,[image_h,image_w])
-                        
+                        prob_mean = np.nanmean(prob_iter_tot, axis=0)
+                        prob_variance = np.var(prob_iter_tot, axis=0)
+                        pred = np.reshape(np.argmax(prob_mean, axis=-1),
+                                          [-1])  # pred is the predicted label with the mean of generated samples
+                        # THIS TIME I DIDN'T INCLUDE TAU
+                        var_one = var_calculate(pred, prob_variance)
+                        pred = np.reshape(pred, [image_h, image_w])
 
                 pred_tot.append(pred)
                 var_tot.append(var_one)
-            
+
             draw_plots_bayes(images, labels, pred_tot, var_tot)
 
-    def visual_results_external_image(self, images, FLAG_MAX_VOTE = False):
-        
-        #train_dir = "./saved_models/segnet_vgg_bayes/segnet_vgg_bayes_30000/model.ckpt-30000"
-        #train_dir = "./saved_models/segnet_scratch/segnet_scratch_30000/model.ckpt-30000"
-        
-        
+    def visual_results_external_image(self, images, FLAG_MAX_VOTE=False):
+
+        # train_dir = "./saved_models/segnet_vgg_bayes/segnet_vgg_bayes_30000/model.ckpt-30000"
+        # train_dir = "./saved_models/segnet_scratch/segnet_scratch_30000/model.ckpt-30000"
+
         i_width = 480
         i_height = 360
         images = [misc.imresize(image, (i_height, i_width)) for image in images]
-        
+
         image_w = self.config["INPUT_WIDTH"]
         image_h = self.config["INPUT_HEIGHT"]
         image_c = self.config["INPUT_CHANNELS"]
@@ -396,90 +397,88 @@ class SegNet:
         FLAG_BAYES = self.config["BAYES"]
 
         with self.sess as sess:
-            
+
             # Restore saved session
-            saver = tf.train.Saver()
+            saver = tf.compat.v1.train.Saver()
             saver.restore(sess, train_dir)
-            
-            _, _, prediction = cal_loss(logits=self.logits, 
-                                           labels=self.labels_pl)
-            prob = tf.nn.softmax(self.logits,dim = -1)
-            
+
+            _, _, prediction = cal_loss(logits=self.logits,
+                                        labels=self.labels_pl)
+            prob = tf.nn.softmax(self.logits, axis=-1)
+
             num_sample_generate = 30
             pred_tot = []
             var_tot = []
-            
+
             labels = []
             for i in range(len(images)):
                 labels.append(np.array([[1 for x in range(480)] for y in range(360)]))
-            
-            
+
             inference_time = []
             start_time = time.time()
-            
-            for image_batch, label_batch in zip(images,labels):
-            #for image_batch in zip(images):
-                
-                image_batch = np.reshape(image_batch,[1,image_h,image_w,image_c])
-                label_batch = np.reshape(label_batch,[1,image_h,image_w,1])
-                
+
+            for image_batch, label_batch in zip(images, labels):
+                # for image_batch in zip(images):
+
+                image_batch = np.reshape(image_batch, [1, image_h, image_w, image_c])
+                label_batch = np.reshape(label_batch, [1, image_h, image_w, 1])
+
                 if FLAG_BAYES is False:
                     fetches = [prediction]
-                    feed_dict = {self.inputs_pl: image_batch, 
-                                 self.labels_pl: label_batch, 
-                                 self.is_training_pl: False, 
+                    feed_dict = {self.inputs_pl: image_batch,
+                                 self.labels_pl: label_batch,
+                                 self.is_training_pl: False,
                                  self.keep_prob_pl: 0.5,
                                  self.batch_size_pl: 1}
-                    pred = sess.run(fetches = fetches, feed_dict = feed_dict)
-                    pred = np.reshape(pred,[image_h,image_w])
+                    pred = sess.run(fetches=fetches, feed_dict=feed_dict)
+                    pred = np.reshape(pred, [image_h, image_w])
                     var_one = []
                 else:
-                    feed_dict = {self.inputs_pl: image_batch, 
-                                 self.labels_pl: label_batch, 
-                                 self.is_training_pl: False, 
+                    feed_dict = {self.inputs_pl: image_batch,
+                                 self.labels_pl: label_batch,
+                                 self.is_training_pl: False,
                                  self.keep_prob_pl: 0.5,
                                  self.with_dropout_pl: True,
                                  self.batch_size_pl: 1}
                     prob_iter_tot = []
                     pred_iter_tot = []
                     for iter_step in range(num_sample_generate):
-                        prob_iter_step = sess.run(fetches = [prob], feed_dict = feed_dict)
+                        prob_iter_step = sess.run(fetches=[prob], feed_dict=feed_dict)
                         prob_iter_tot.append(prob_iter_step)
-                        pred_iter_tot.append(np.reshape(np.argmax(prob_iter_step,axis = -1),[-1]))
-                        
+                        pred_iter_tot.append(np.reshape(np.argmax(prob_iter_step, axis=-1), [-1]))
+
                     if FLAG_MAX_VOTE is True:
-                        prob_variance,pred = MAX_VOTE(pred_iter_tot,prob_iter_tot,self.config["NUM_CLASSES"])
-                        #acc_per = np.mean(np.equal(pred,np.reshape(label_batch,[-1])))
-                        var_one = var_calculate(pred,prob_variance)
-                        pred = np.reshape(pred,[image_h,image_w])
+                        prob_variance, pred = MAX_VOTE(pred_iter_tot, prob_iter_tot, self.config["NUM_CLASSES"])
+                        # acc_per = np.mean(np.equal(pred,np.reshape(label_batch,[-1])))
+                        var_one = var_calculate(pred, prob_variance)
+                        pred = np.reshape(pred, [image_h, image_w])
                     else:
-                        prob_mean = np.nanmean(prob_iter_tot,axis = 0)
-                        prob_variance = np.var(prob_iter_tot, axis = 0)
-                        pred = np.reshape(np.argmax(prob_mean,axis = -1),[-1]) #pred is the predicted label with the mean of generated samples
-                        #THIS TIME I DIDN'T INCLUDE TAU
-                        var_one = var_calculate(pred,prob_variance)
-                        pred = np.reshape(pred,[image_h,image_w])
-                        
+                        prob_mean = np.nanmean(prob_iter_tot, axis=0)
+                        prob_variance = np.var(prob_iter_tot, axis=0)
+                        pred = np.reshape(np.argmax(prob_mean, axis=-1),
+                                          [-1])  # pred is the predicted label with the mean of generated samples
+                        # THIS TIME I DIDN'T INCLUDE TAU
+                        var_one = var_calculate(pred, prob_variance)
+                        pred = np.reshape(pred, [image_h, image_w])
 
                 pred_tot.append(pred)
                 var_tot.append(var_one)
                 inference_time.append(time.time() - start_time)
                 start_time = time.time()
-            
+
             try:
                 draw_plots_bayes_external(images, pred_tot, var_tot)
                 return pred_tot, var_tot, inference_time
             except:
                 return pred_tot, var_tot, inference_time
-            
-           
+
     def test(self):
         image_filename, label_filename = get_filename_list(self.test_file, self.config)
 
         with self.graph.as_default():
             with self.sess as sess:
                 loss, accuracy, prediction = normal_loss(self.logits, self.labels_pl, self.num_classes)
-                prob = tf.nn.softmax(self.logits, dim=-1)
+                prob = tf.nn.softmax(self.logits, axis=-1)
                 prob = tf.reshape(prob, [self.input_h, self.input_w, self.num_classes])
 
                 images, labels = get_all_test_data(image_filename, label_filename)
@@ -564,7 +563,8 @@ class SegNet:
                         acc_tot.append(acc_per)
                         pred_tot.append(pred)
                         var_tot.append(var_one)
-                        print("Image Index {}: TEST Loss{:6.3f}, TEST Accu {:6.3f}".format(step, loss_tot[-1], acc_tot[-1]))
+                        print("Image Index {}: TEST Loss{:6.3f}, TEST Accu {:6.3f}".format(step, loss_tot[-1],
+                                                                                           acc_tot[-1]))
                         step = step + 1
                         per_class_acc(logit, label_batch, self.num_classes)
                         hist += get_hist(logit, label_batch)
@@ -581,7 +581,7 @@ class SegNet:
                     iu_mean_final.append(np.nanmean(iu))
 
             return acc_final, iu_final, iu_mean_final, prob_variance, logit_variance, pred_tot, var_tot
-            
+
     def save(self):
         np.save(os.path.join(self.saved_dir, "Data", "trainloss"), self.train_loss)
         np.save(os.path.join(self.saved_dir, "Data", "trainacc"), self.train_accuracy)
@@ -589,8 +589,7 @@ class SegNet:
         np.save(os.path.join(self.saved_dir, "Data", "valacc"), self.val_acc)
         with self.sess.as_default():
             with self.graph.as_default():
-                self.saver = tf.train.Saver()
+                self.saver = tf.compat.v1.train.Saver()
                 checkpoint_path = os.path.join(self.saved_dir, 'model.ckpt')
                 self.saver.save(self.sess, checkpoint_path, global_step=self.model_version)
                 self.model_version += 1
-

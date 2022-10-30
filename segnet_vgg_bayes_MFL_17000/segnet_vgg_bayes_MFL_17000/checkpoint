@@ -1,0 +1,2 @@
+model_checkpoint_path: "/zhome/1c/2/114196/Documents/SegNet-tensorflow/segnet_vgg_bayes_MFL_17000/model.ckpt-17000"
+all_model_checkpoint_paths: "/zhome/1c/2/114196/Documents/SegNet-tensorflow/segnet_vgg_bayes_MFL_17000/model.ckpt-17000"
