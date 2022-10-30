@@ -2,8 +2,17 @@ import json
 import os
 
 import tensorflow as tf
+from tensorboard.summary import Output
+from tensorflow.python.keras import Model, Input
 import numpy as np
 import random
+
+from tensorflow.python.keras.layers import Lambda
+from tensorflow.python.keras.metrics import Precision, Accuracy, Recall
+from tensorflow.python.layers.base import Layer
+from tensorflow.python.ops.gen_nn_ops import BiasAdd
+from tensorflow.python.training.adam import AdamOptimizer
+
 from layers_object import conv_layer, up_sampling, max_pool, initialization, \
     variable_with_weight_decay
 from evaluation_object import cal_loss, normal_loss, per_class_acc, get_hist, print_hist_summary, train_op, MAX_VOTE, \
@@ -183,16 +192,50 @@ class SegNet:
                 self.biases = variable_with_weight_decay('biases', tf.compat.v1.constant_initializer(0.0),
                                                          shape=[self.num_classes], wd=False)
                 self.logits = tf.nn.bias_add(self.conv, self.biases, name=scope.name)
+                self.output = Lambda(tf.nn.bias_add)(self.conv, self.biases, scope.name)
 
-    def restore(self, res_file):
+    def restore(self, res_file_dir):
         from tensorflow.python.tools.inspect_checkpoint import print_tensors_in_checkpoint_file
+        index = 0
+        candidate_res_file = 'model.ckpt-0'
+        files_in_dir = os.listdir(res_file_dir)
+        res_file = None
+        while any(f.startswith(candidate_res_file) for f in files_in_dir):
+            res_file = candidate_res_file
+            index += 1
+            candidate_res_file = f'model.ckpt-{index}'
+        res_file = os.path.join(res_file_dir, res_file)
         print_tensors_in_checkpoint_file(res_file, None, False)
         with self.graph.as_default():
-            for v in tf.compat.v1.global_variables():
-                print(v)
             if self.saver is None:
                 self.saver = tf.compat.v1.train.Saver(tf.compat.v1.global_variables())
             self.saver.restore(self.sess, res_file)
+            self.model_version = index
+
+    def train_v2(self, batch_size: int):
+        tf_model = Model(Input(tensor=self.inputs_pl), self.output, name='SegNet')
+        loss, accuracy, prediction = cal_loss(logits=self.logits, labels=self.labels_pl)
+        tf_model.compile(optimizer=AdamOptimizer(learning_rate=0.001),
+                         loss=loss,
+                         metrics=[Precision(), Accuracy(), Recall()])
+
+        image_filename, label_filename = get_filename_list(self.train_file, self.config)
+        val_image_filename, val_label_filename = get_filename_list(self.val_file, self.config)
+        self.images_tr, self.labels_tr = dataset_inputs(image_filename, label_filename, batch_size, self.config)
+        self.images_val, self.labels_val = dataset_inputs(val_image_filename, val_label_filename, batch_size,
+                                                          self.config)
+        tf_model.summary()
+        cp_callback = tf.keras.callbacks.ModelCheckpoint(filepath='checkpoints2',
+                                                         save_weights_only=True,
+                                                         verbose=1)
+        history = tf_model.fit(x=self.images_tr,
+                               y=self.labels_tr,
+                               batch_size=batch_size,
+                               epochs=1,
+                               validation_data=(self.images_val, self.labels_val),
+                               validation_batch_size=batch_size,
+                               callbacks=[cp_callback])
+        print(history.history)
 
     def train(self, max_steps=30001, batch_size=3):
         # For train the bayes, the FLAG_OPT SHOULD BE SGD, BUT FOR TRAIN THE NORMAL SEGNET,
@@ -583,6 +626,7 @@ class SegNet:
             return acc_final, iu_final, iu_mean_final, prob_variance, logit_variance, pred_tot, var_tot
 
     def save(self):
+        os.makedirs(os.path.join(self.saved_dir, "Data"), exist_ok=True)
         np.save(os.path.join(self.saved_dir, "Data", "trainloss"), self.train_loss)
         np.save(os.path.join(self.saved_dir, "Data", "trainacc"), self.train_accuracy)
         np.save(os.path.join(self.saved_dir, "Data", "valloss"), self.val_loss)
@@ -591,5 +635,6 @@ class SegNet:
             with self.graph.as_default():
                 self.saver = tf.compat.v1.train.Saver()
                 checkpoint_path = os.path.join(self.saved_dir, 'model.ckpt')
-                self.saver.save(self.sess, checkpoint_path, global_step=self.model_version)
+                path = self.saver.save(self.sess, checkpoint_path, global_step=self.model_version)
+                print(f'Saved model to {path}')
                 self.model_version += 1
