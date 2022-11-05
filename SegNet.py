@@ -1,26 +1,242 @@
+import functools
 import json
 import os
-
-import tensorflow as tf
-from tensorboard.summary import Output
-from tensorflow.python.keras import Model, Input
-import numpy as np
 import random
+import time
 
-from tensorflow.python.keras.layers import Lambda
+import numpy as np
+import tensorflow as tf
+from scipy import misc
+from tensorflow.python.keras import Model, Input
 from tensorflow.python.keras.metrics import Precision, Accuracy, Recall
-from tensorflow.python.layers.base import Layer
-from tensorflow.python.ops.gen_nn_ops import BiasAdd
 from tensorflow.python.training.adam import AdamOptimizer
 
-from layers_object import conv_layer, up_sampling, max_pool, initialization, \
-    variable_with_weight_decay
-from evaluation_object import cal_loss, normal_loss, per_class_acc, get_hist, print_hist_summary, train_op, MAX_VOTE, \
-    var_calculate
-from inputs_object import get_filename_list, dataset_inputs, get_all_test_data
 from drawings_object import draw_plots_bayes, draw_plots_bayes_external
-from scipy import misc
-import time
+from evaluation_object import cal_loss, normal_loss, per_class_acc, get_hist, print_hist_summary, train_op, MAX_VOTE, \
+    var_calculate, weighted_loss
+from inputs_object import get_filename_list, dataset_inputs, get_all_test_data, get_dataset
+from layers_object import conv_layer, up_sampling, max_pool, initialization, \
+    variable_with_weight_decay, ConvLayerCompat
+
+
+class SegNetCompatModel(tf.keras.layers.Layer):
+    def __init__(self, conf_file="config.json", is_training=True, with_dropout=True, keep_prob=0.5, **kwargs):
+        super().__init__(**kwargs)
+        with open(conf_file) as f:
+            self.config = json.load(f)
+
+        self.num_classes = self.config["NUM_CLASSES"]
+        self.use_vgg = self.config["USE_VGG"]
+
+        if self.use_vgg is False:
+            self.vgg_param_dict = None
+            print("No VGG path in config, so learning from scratch")
+        else:
+            self.vgg16_npy_path = self.config["VGG_FILE"]
+            self.vgg_param_dict = np.load(self.vgg16_npy_path, encoding='latin1').item()
+            print("VGG parameter loaded")
+
+        self.train_file = self.config["TRAIN_FILE"]
+        self.val_file = self.config["VAL_FILE"]
+        self.test_file = self.config["TEST_FILE"]
+        self.img_prefix = self.config["IMG_PREFIX"]
+        self.label_prefix = self.config["LABEL_PREFIX"]
+        self.bayes = self.config["BAYES"]
+        self.opt = self.config["OPT"]
+        self.saved_dir = self.config["SAVE_MODEL_DIR"]
+        self.input_w = self.config["INPUT_WIDTH"]
+        self.input_h = self.config["INPUT_HEIGHT"]
+        self.input_c = self.config["INPUT_CHANNELS"]
+        self.tb_logs = self.config["TB_LOGS"]
+        self.batch_size = self.config["BATCH_SIZE"]
+
+        self.train_loss, self.train_accuracy = [], []
+        self.val_loss, self.val_acc = [], []
+
+        self.model_version = 0  # used for saving the model
+        self.saver = None
+        self.images_tr, self.labels_tr = None, None
+        self.images_val, self.labels_val = None, None
+
+        self.is_training = is_training
+        self.with_dropout_pl = with_dropout
+        self.keep_prob_pl = keep_prob
+
+        self.input_layer = Input(shape=[self.input_h, self.input_w, self.input_c], dtype=tf.float32)
+
+    @tf.compat.v1.keras.utils.track_tf1_style_variables
+    def call(self, inputs):
+        batch_size_pl = self.batch_size
+        is_training_pl = self.is_training
+        with_dropout_pl = self.with_dropout_pl
+        keep_prob_pl = self.keep_prob_pl
+
+        # Before enter the images into the architecture, we need to do Local Contrast Normalization
+        # But it seems a bit complicated, so we use Local Response Normalization which implement in Tensorflow
+        # Reference page:https://www.tensorflow.org/api_docs/python/tf/nn/local_response_normalization
+
+        norm1 = tf.nn.lrn(inputs, depth_radius=5, bias=1.0, alpha=0.0001, beta=0.75, name='norm1')
+        # first box of convolution layer,each part we do convolution two times, so we have conv1_1, and conv1_2
+        conv1_1 = ConvLayerCompat("conv1_1", [3, 3, 3, 64], is_training_pl, self.use_vgg, self.vgg_param_dict)(norm1)
+        # conv1_1 = conv_layer(norm1, )
+        conv1_2 = conv_layer(conv1_1, "conv1_2", [3, 3, 64, 64], is_training_pl, self.use_vgg,
+                             self.vgg_param_dict)
+        pool1, pool1_index, shape_1 = max_pool(conv1_2, 'pool1')
+
+        # Second box of convolution layer(4)
+        conv2_1 = conv_layer(pool1, "conv2_1", [3, 3, 64, 128], is_training_pl, self.use_vgg,
+                             self.vgg_param_dict)
+        conv2_2 = conv_layer(conv2_1, "conv2_2", [3, 3, 128, 128], is_training_pl, self.use_vgg,
+                             self.vgg_param_dict)
+        pool2, pool2_index, shape_2 = max_pool(conv2_2, 'pool2')
+
+        # Third box of convolution layer(7)
+        conv3_1 = conv_layer(pool2, "conv3_1", [3, 3, 128, 256], is_training_pl, self.use_vgg,
+                             self.vgg_param_dict)
+        conv3_2 = conv_layer(conv3_1, "conv3_2", [3, 3, 256, 256], is_training_pl, self.use_vgg,
+                             self.vgg_param_dict)
+        conv3_3 = conv_layer(conv3_2, "conv3_3", [3, 3, 256, 256], is_training_pl, self.use_vgg,
+                             self.vgg_param_dict)
+        pool3, pool3_index, shape_3 = max_pool(conv3_3, 'pool3')
+
+        # Fourth box of convolution layer(10)
+        if self.bayes:
+            dropout1 = tf.compat.v1.layers.dropout(pool3, rate=(1 - keep_prob_pl),
+                                                   training=with_dropout_pl, name="dropout1")
+            conv4_1 = conv_layer(dropout1, "conv4_1", [3, 3, 256, 512], is_training_pl, self.use_vgg,
+                                 self.vgg_param_dict)
+        else:
+            conv4_1 = conv_layer(pool3, "conv4_1", [3, 3, 256, 512], is_training_pl, self.use_vgg,
+                                 self.vgg_param_dict)
+        conv4_2 = conv_layer(conv4_1, "conv4_2", [3, 3, 512, 512], is_training_pl, self.use_vgg,
+                             self.vgg_param_dict)
+        conv4_3 = conv_layer(conv4_2, "conv4_3", [3, 3, 512, 512], is_training_pl, self.use_vgg,
+                             self.vgg_param_dict)
+        pool4, pool4_index, shape_4 = max_pool(conv4_3, 'pool4')
+
+        # Fifth box of convolution layers(13)
+        if self.bayes:
+            dropout2 = tf.compat.v1.layers.dropout(pool4, rate=(1 - keep_prob_pl),
+                                                   training=with_dropout_pl, name="dropout2")
+            conv5_1 = conv_layer(dropout2, "conv5_1", [3, 3, 512, 512], is_training_pl, self.use_vgg,
+                                 self.vgg_param_dict)
+        else:
+            conv5_1 = conv_layer(pool4, "conv5_1", [3, 3, 512, 512], is_training_pl, self.use_vgg,
+                                 self.vgg_param_dict)
+        conv5_2 = conv_layer(conv5_1, "conv5_2", [3, 3, 512, 512], is_training_pl, self.use_vgg,
+                             self.vgg_param_dict)
+        conv5_3 = conv_layer(conv5_2, "conv5_3", [3, 3, 512, 512], is_training_pl, self.use_vgg,
+                             self.vgg_param_dict)
+        pool5, pool5_index, shape_5 = max_pool(conv5_3, 'pool5')
+
+        # ---------------------So Now the encoder process has been Finished--------------------------------------#
+        # ------------------Then Let's start Decoder Process-----------------------------------------------------#
+
+        # First box of deconvolution layers(3)
+        if self.bayes:
+            dropout3 = tf.compat.v1.layers.dropout(pool5, rate=(1 - keep_prob_pl),
+                                                   training=with_dropout_pl, name="dropout3")
+            deconv5_1 = up_sampling(dropout3, pool5_index, shape_5, batch_size_pl,
+                                    name="unpool_5")
+        else:
+            deconv5_1 = up_sampling(pool5, pool5_index, shape_5, batch_size_pl,
+                                    name="unpool_5")
+        deconv5_2 = conv_layer(deconv5_1, "deconv5_2", [3, 3, 512, 512], is_training_pl)
+        deconv5_3 = conv_layer(deconv5_2, "deconv5_3", [3, 3, 512, 512], is_training_pl)
+        deconv5_4 = conv_layer(deconv5_3, "deconv5_4", [3, 3, 512, 512], is_training_pl)
+        # Second box of deconvolution layers(6)
+        if self.bayes:
+            dropout4 = tf.compat.v1.layers.dropout(deconv5_4, rate=(1 - keep_prob_pl),
+                                                   training=with_dropout_pl, name="dropout4")
+            deconv4_1 = up_sampling(dropout4, pool4_index, shape_4, batch_size_pl,
+                                    name="unpool_4")
+        else:
+            deconv4_1 = up_sampling(deconv5_4, pool4_index, shape_4, batch_size_pl,
+                                    name="unpool_4")
+        deconv4_2 = conv_layer(deconv4_1, "deconv4_2", [3, 3, 512, 512], is_training_pl)
+        deconv4_3 = conv_layer(deconv4_2, "deconv4_3", [3, 3, 512, 512], is_training_pl)
+        deconv4_4 = conv_layer(deconv4_3, "deconv4_4", [3, 3, 512, 256], is_training_pl)
+        # Third box of deconvolution layers(9)
+        if self.bayes:
+            dropout5 = tf.compat.v1.layers.dropout(deconv4_4, rate=(1 - keep_prob_pl),
+                                                   training=with_dropout_pl, name="dropout5")
+            deconv3_1 = up_sampling(dropout5, pool3_index, shape_3, batch_size_pl,
+                                    name="unpool_3")
+        else:
+            deconv3_1 = up_sampling(deconv4_4, pool3_index, shape_3, batch_size_pl,
+                                    name="unpool_3")
+        deconv3_2 = conv_layer(deconv3_1, "deconv3_2", [3, 3, 256, 256], is_training_pl)
+        deconv3_3 = conv_layer(deconv3_2, "deconv3_3", [3, 3, 256, 256], is_training_pl)
+        deconv3_4 = conv_layer(deconv3_3, "deconv3_4", [3, 3, 256, 128], is_training_pl)
+        # Fourth box of deconvolution layers(11)
+        if self.bayes:
+            dropout6 = tf.compat.v1.layers.dropout(deconv3_4, rate=(1 - keep_prob_pl),
+                                                   training=with_dropout_pl, name="dropout6")
+            deconv2_1 = up_sampling(dropout6, pool2_index, shape_2, batch_size_pl,
+                                    name="unpool_2")
+        else:
+            deconv2_1 = up_sampling(deconv3_4, pool2_index, shape_2, batch_size_pl,
+                                    name="unpool_2")
+        deconv2_2 = conv_layer(deconv2_1, "deconv2_2", [3, 3, 128, 128], is_training_pl)
+        deconv2_3 = conv_layer(deconv2_2, "deconv2_3", [3, 3, 128, 64], is_training_pl)
+        # Fifth box of deconvolution layers(13)
+        deconv1_1 = up_sampling(deconv2_3, pool1_index, shape_1, batch_size_pl,
+                                name="unpool_1")
+        deconv1_2 = conv_layer(deconv1_1, "deconv1_2", [3, 3, 64, 64], is_training_pl)
+        deconv1_3 = conv_layer(deconv1_2, "deconv1_3", [3, 3, 64, 64], is_training_pl)
+
+        with tf.compat.v1.variable_scope('conv_classifier') as scope:
+            kernel = variable_with_weight_decay('weights', initializer=initialization(1, 64),
+                                                shape=[1, 1, 64, self.num_classes], wd=False)
+            conv = tf.nn.conv2d(input=deconv1_3, filters=kernel, strides=[1, 1, 1, 1],
+                                padding='SAME')
+            biases = variable_with_weight_decay('biases', tf.compat.v1.constant_initializer(0.0),
+                                                shape=[self.num_classes], wd=False)
+            logits = tf.nn.bias_add(conv, biases, name=scope.name)
+        return logits
+
+    def train_v2(self, batch_size: int):
+        model = self(self.input_layer)
+        tf_model = Model(self.input_layer, model, name='SegNet')
+        loss_weight = np.array([
+            0.2595,
+            0.1826,
+            4.5640,
+            0.1417,
+            0.9051,
+            0.3826,
+            9.6446,
+            1.8418,
+            0.6823,
+            6.2478,
+            7.3614,
+            1.0974
+        ])
+        loss = functools.partial(weighted_loss, number_class=self.num_classes, frequency=loss_weight)
+        tf_model.compile(optimizer=AdamOptimizer(learning_rate=0.001),
+                         loss=loss,
+                         metrics=[Precision(), Accuracy(), Recall()])
+
+        image_filename, label_filename = get_filename_list(self.train_file, self.config)
+        val_image_filename, val_label_filename = get_filename_list(self.val_file, self.config)
+
+        dataset = get_dataset(image_filename, label_filename, config=self.config)
+        validation_dataset = get_dataset(val_image_filename, val_label_filename, config=self.config)
+
+        # self.images_tr, self.labels_tr = dataset_inputs(image_filename, label_filename, batch_size, self.config)
+        # self.images_val, self.labels_val = dataset_inputs(val_image_filename, val_label_filename, batch_size,
+        #                                                   self.config)
+        tf_model.summary()
+        cp_callback = tf.keras.callbacks.ModelCheckpoint(filepath='checkpoints2',
+                                                         save_weights_only=True,
+                                                         verbose=1)
+        history = tf_model.fit(x=dataset,
+                               batch_size=batch_size,
+                               epochs=1,
+                               validation_data=validation_dataset,
+                               validation_batch_size=batch_size,
+                               callbacks=[cp_callback])
+        print(history.history)
 
 
 class SegNet:
@@ -192,13 +408,15 @@ class SegNet:
                 self.biases = variable_with_weight_decay('biases', tf.compat.v1.constant_initializer(0.0),
                                                          shape=[self.num_classes], wd=False)
                 self.logits = tf.nn.bias_add(self.conv, self.biases, name=scope.name)
-                self.output = Lambda(tf.nn.bias_add)(self.conv, self.biases, scope.name)
 
-    def restore(self, res_file_dir):
+    def restore(self):
         from tensorflow.python.tools.inspect_checkpoint import print_tensors_in_checkpoint_file
         index = 0
         candidate_res_file = 'model.ckpt-0'
+        res_file_dir = self.saved_dir
         files_in_dir = os.listdir(res_file_dir)
+        if not files_in_dir:
+            return
         res_file = None
         while any(f.startswith(candidate_res_file) for f in files_in_dir):
             res_file = candidate_res_file
@@ -210,32 +428,8 @@ class SegNet:
             if self.saver is None:
                 self.saver = tf.compat.v1.train.Saver(tf.compat.v1.global_variables())
             self.saver.restore(self.sess, res_file)
+            self.sess = tf.compat.v1.Session()
             self.model_version = index
-
-    def train_v2(self, batch_size: int):
-        tf_model = Model(Input(tensor=self.inputs_pl), self.output, name='SegNet')
-        loss, accuracy, prediction = cal_loss(logits=self.logits, labels=self.labels_pl)
-        tf_model.compile(optimizer=AdamOptimizer(learning_rate=0.001),
-                         loss=loss,
-                         metrics=[Precision(), Accuracy(), Recall()])
-
-        image_filename, label_filename = get_filename_list(self.train_file, self.config)
-        val_image_filename, val_label_filename = get_filename_list(self.val_file, self.config)
-        self.images_tr, self.labels_tr = dataset_inputs(image_filename, label_filename, batch_size, self.config)
-        self.images_val, self.labels_val = dataset_inputs(val_image_filename, val_label_filename, batch_size,
-                                                          self.config)
-        tf_model.summary()
-        cp_callback = tf.keras.callbacks.ModelCheckpoint(filepath='checkpoints2',
-                                                         save_weights_only=True,
-                                                         verbose=1)
-        history = tf_model.fit(x=self.images_tr,
-                               y=self.labels_tr,
-                               batch_size=batch_size,
-                               epochs=1,
-                               validation_data=(self.images_val, self.labels_val),
-                               validation_batch_size=batch_size,
-                               callbacks=[cp_callback])
-        print(history.history)
 
     def train(self, max_steps=30001, batch_size=3):
         # For train the bayes, the FLAG_OPT SHOULD BE SGD, BUT FOR TRAIN THE NORMAL SEGNET,
@@ -321,6 +515,8 @@ class SegNet:
                                 step, self.train_loss[-1], self.train_accuracy[-1], self.val_loss[-1],
                                 self.val_acc[-1]))
 
+                    if step != 0 and step % len(image_filename) == 0:
+                        self.save()
                 coord.request_stop()
                 coord.join(threads)
 

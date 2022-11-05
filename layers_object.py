@@ -17,6 +17,40 @@ def max_pool(inputs, name):
     # https://www.tensorflow.org/versions/r1.0/api_docs/python/tf/nn/max_pool_with_argmax
 
 
+class ConvLayerCompat(tf.keras.layers.Layer):
+    def __init__(self, name, shape, is_training, use_vgg=False, vgg_param_dict=None, **kwargs):
+        super().__init__(**kwargs)
+        self._name = name
+        self.is_training = is_training
+        self.use_vgg = use_vgg
+        self.vgg_param_dict = vgg_param_dict
+        self.shape = shape
+
+    @tf.compat.v1.keras.utils.track_tf1_style_variables
+    def call(self, inputs, *args, **kwargs):
+        bottom = inputs
+
+        def get_conv_filter(val_name):
+            return self.vgg_param_dict[val_name][0]
+
+        def get_biases(val_name):
+            return self.vgg_param_dict[val_name][1]
+
+        if self.use_vgg:
+            init = get_conv_filter(self._name)
+        else:
+            init = initialization(self.shape[0], self.shape[2])
+        conv = tf.keras.layers.Conv2D(filters=self.shape[-1], kernel_size=self.shape[:2], strides=[1, 1],
+                                      padding='SAME', kernel_initializer=init)(bottom)
+        if self.use_vgg:
+            conv_biases = tf.initializers.Constant(get_biases(self._name))(shape=self.shape[3])
+        else:
+            conv_biases = tf.initializers.Constant(0.0)(shape=self.shape[3])
+        bias = tf.nn.bias_add(conv, conv_biases)
+        conv_out = tf.nn.relu(batch_norm(bias))
+        return conv_out
+
+
 def conv_layer(bottom, name, shape, is_training, use_vgg=False, vgg_param_dict=None):
     """
     Inputs:

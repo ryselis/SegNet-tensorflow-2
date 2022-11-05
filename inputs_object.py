@@ -1,10 +1,10 @@
-import tensorflow as tf
-from tensorflow.python.framework import ops
-from tensorflow.python.framework import dtypes
-import os
-import numpy as np
+import functools
+
 import scipy
-from scipy import misc
+import tensorflow as tf
+from tensorflow.python.data import AUTOTUNE
+from tensorflow.python.framework import dtypes
+from tensorflow.python.framework import ops
 
 
 def get_filename_list(path, config):
@@ -27,18 +27,28 @@ def dataset_reader(filename_queue, config):  # prev name: CamVid_reader
     label_filename = filename_queue[1]  # tensor of type string
 
     # get png encoded image
-    imageValue = tf.io.read_file(image_filename)
-    labelValue = tf.io.read_file(label_filename)
+    image_value = tf.io.read_file(image_filename)
+    label_value = tf.io.read_file(label_filename)
 
     # decodes a png image into a uint8 or uint16 tensor
     # returns a tensor of type dtype with shape [height, width, depth]
-    image_bytes = tf.image.decode_png(imageValue)
-    label_bytes = tf.image.decode_png(labelValue)  # Labels are png, not jpeg
+    image_bytes = tf.image.decode_png(image_value)
+    label_bytes = tf.image.decode_png(label_value)  # Labels are png, not jpeg
 
     image = tf.reshape(image_bytes, (config["INPUT_HEIGHT"], config["INPUT_WIDTH"], config["INPUT_CHANNELS"]))
     label = tf.reshape(label_bytes, (config["INPUT_HEIGHT"], config["INPUT_WIDTH"], 1))
 
     return image, label
+
+
+def get_dataset(image_filenames, label_filenames, config):
+    reader = functools.partial(dataset_reader, config=config)
+    features = tf.constant(image_filenames)
+    labels = tf.constant(label_filenames)
+    ds = tf.data.Dataset.from_tensor_slices((features, labels)).map(reader)
+    ds = ds.shuffle(buffer_size=100)
+    ds = ds.prefetch(buffer_size=AUTOTUNE)
+    return ds
 
 
 def dataset_inputs(image_filenames, label_filenames, batch_size, config):
