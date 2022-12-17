@@ -119,6 +119,7 @@ def up_sampling(pool, ind, output_shape, batch_size, name=None):
            :param batch_size:
     """
     with tf.compat.v1.variable_scope(name):
+        print(pool)
         pool_ = tf.reshape(pool, [-1])
         batch_range = tf.reshape(tf.range(batch_size, dtype=ind.dtype), [tf.shape(input=pool)[0], 1, 1, 1])
         b = tf.ones_like(ind) * batch_range

@@ -1,20 +1,25 @@
+import csv
 import functools
+import itertools
 import json
 import os
 import random
 import time
+from datetime import datetime, timedelta
 
 import numpy as np
 import tensorflow as tf
 from scipy import misc
+from skimage.io import imsave
 from tensorflow.python.keras import Model, Input
 from tensorflow.python.keras.metrics import Precision, Accuracy, Recall
 from tensorflow.python.training.adam import AdamOptimizer
 
+from dataset import get_dataset_generator, get_full_data_generator
 from drawings_object import draw_plots_bayes, draw_plots_bayes_external
 from evaluation_object import cal_loss, normal_loss, per_class_acc, get_hist, print_hist_summary, train_op, MAX_VOTE, \
     var_calculate, weighted_loss
-from inputs_object import get_filename_list, dataset_inputs, get_all_test_data, get_dataset
+from inputs_object import get_filename_list, get_all_test_data, get_dataset
 from layers_object import conv_layer, up_sampling, max_pool, initialization, \
     variable_with_weight_decay, ConvLayerCompat
 
@@ -239,6 +244,19 @@ class SegNetCompatModel(tf.keras.layers.Layer):
         print(history.history)
 
 
+def is_male_file(file_name):
+    male_participant_names = ["Andrius", "Ryselis", "Rytis", "Tautvydas", "Tomas"]
+    if any(name in file_name for name in male_participant_names):
+        return True
+
+    female_participant_names = ["Reda", "Renata"]
+    if any(name in file_name for name in female_participant_names):
+        return False
+
+    male_labels = [f"V{i}_" for i in range(1, 22)]
+    return any(label in file_name for label in male_labels)
+
+
 class SegNet:
     def __init__(self, conf_file="config.json"):
         with open(conf_file) as f:
@@ -418,7 +436,7 @@ class SegNet:
         if not files_in_dir:
             return
         res_file = None
-        while any(f.startswith(candidate_res_file) for f in files_in_dir):
+        while any(f.startswith(f'{candidate_res_file}.') for f in files_in_dir):
             res_file = candidate_res_file
             index += 1
             candidate_res_file = f'model.ckpt-{index}'
@@ -431,23 +449,30 @@ class SegNet:
             self.sess = tf.compat.v1.Session()
             self.model_version = index
 
-    def train(self, max_steps=30001, batch_size=3):
+    def train(self, max_steps=30001, batch_size=3, train_duration=None, validate_duration=None):
         # For train the bayes, the FLAG_OPT SHOULD BE SGD, BUT FOR TRAIN THE NORMAL SEGNET,
         # THE FLAG_OPT SHOULD BE ADAM!!!
 
-        image_filename, label_filename = get_filename_list(self.train_file, self.config)
-        val_image_filename, val_label_filename = get_filename_list(self.val_file, self.config)
+        # image_filename, label_filename = get_filename_list(self.train_file, self.config)
+        # val_image_filename, val_label_filename = get_filename_list(self.val_file, self.config)
+        train_start = datetime.now()
+        train_data_generator, test_data_generator = get_dataset_generator(batch_size=batch_size, skip_frames=0)
+        train_data = train_data_generator()
 
         with self.graph.as_default():
-            if self.images_tr is None:
-                self.images_tr, self.labels_tr = dataset_inputs(image_filename, label_filename, batch_size, self.config)
-                self.images_val, self.labels_val = dataset_inputs(val_image_filename, val_label_filename, batch_size,
-                                                                  self.config)
+            # train_dataset = Dataset.from_generator(train_data, output_types=tf.int32).make_one_shot_iterator()
+            # test_dataset = Dataset.from_generator(test_data, output_types=tf.int32).make_one_shot_iterator()
+            # if self.images_tr is None:
+            #     self.images_tr, self.labels_tr = dataset_inputs(image_filename, label_filename, batch_size, self.config)
+            #     self.images_val, self.labels_val = dataset_inputs(val_image_filename, val_label_filename, batch_size,
+            #                                                       self.config)
 
             loss, accuracy, prediction = cal_loss(logits=self.logits, labels=self.labels_pl)
             train, global_step = train_op(total_loss=loss, opt=self.opt)
 
             summary_op = tf.compat.v1.summary.merge_all()
+
+            # steps_wo_improvement = 0
 
             with self.sess.as_default():
                 self.sess.run(tf.compat.v1.local_variables_initializer())
@@ -459,7 +484,11 @@ class SegNet:
                 # https://www.tensorflow.org/versions/r0.12/how_tos/threading_and_queues
                 train_writer = tf.compat.v1.summary.FileWriter(self.tb_logs, self.sess.graph)
                 for step in range(max_steps):
-                    image_batch, label_batch = self.sess.run([self.images_tr, self.labels_tr])
+                    # image_batch, label_batch = self.sess.run([self.images_tr, self.labels_tr])
+                    try:
+                        image_batch, label_batch = next(train_data)
+                    except StopIteration:
+                        break
                     feed_dict = {self.inputs_pl: image_batch,
                                  self.labels_pl: label_batch,
                                  self.is_training_pl: True,
@@ -469,11 +498,12 @@ class SegNet:
 
                     _, _loss, _accuracy, summary = self.sess.run([train, loss, accuracy, summary_op],
                                                                  feed_dict=feed_dict)
+                    # if self.train_loss and _loss < min(self.train_loss):
+                    #     steps_wo_improvement = 0
+                    # else:
+                    #     steps_wo_improvement += 1
                     self.train_loss.append(_loss)
                     self.train_accuracy.append(_accuracy)
-                    print("Iteration {}: Train Loss{:6.3f}, Train Accu {:6.3f}".format(step, self.train_loss[-1],
-                                                                                       self.train_accuracy[-1]),
-                          end='\r', flush=True)
 
                     if step % 100 == 0:
                         # print()
@@ -483,14 +513,60 @@ class SegNet:
                         # per_class_acc is a function from utils
                         train_writer.add_summary(summary, step)
 
-                    if step % 1000 == 0:
-                        print("\nstart validating.......")
-                        _val_loss = []
-                        _val_acc = []
-                        hist = np.zeros((self.num_classes, self.num_classes))
-                        for test_step in range(int(20)):
+                    elapsed_time = datetime.now() - train_start
+                    elapsed_hours = elapsed_time.total_seconds() / 3600
+                    print(f"\rIteration {step}: Train Loss {self.train_loss[-1]:6.3f}, "
+                          f"Train Acc {self.train_accuracy[-1]:6.3f}, Elapsed {elapsed_hours:.2f} hr",
+                          end='', flush=True)
+
+                    if step != 0 and step % 2000 == 0:
+                        self.save()
+                    if train_duration is not None:
+
+                        if elapsed_time > train_duration:
+                            break
+                    # elif steps_wo_improvement == 20:
+                    #     break
+
+                print()
+                self.save()
+                print("\nstart validating.......")
+                _val_loss = []
+                _val_acc = []
+                hist = np.zeros((self.num_classes, self.num_classes))
+
+                test_data = get_full_data_generator(batch_size=batch_size, simple_samples=100, complex_samples=100)
+
+                validation_start = datetime.now()
+
+                with open('per_frame_data.csv', 'w') as f:
+                    csv_writer = csv.DictWriter(f, fieldnames=["Filename",
+                                                               "Best match",
+                                                               "Worst match",
+                                                               "Average match",
+                                                               "Total frames",
+                                                               "Median",
+                                                               "Stddev",
+                                                               "Sex",
+                                                               'Average mIoU'])
+                    csv_writer.writeheader()
+                    for file_index, (filename, file_frame_generator) in enumerate(test_data):
+                        elapsed_time = datetime.now() - validation_start
+                        if validate_duration and elapsed_time > validate_duration:
+                            break
+                        per_file_miou = []
+                        per_file_csi = []
+
+                        for index, (image_batch_val, label_batch_val) in enumerate(file_frame_generator):
+                            if index % 5 != 0:
+                                continue
+                            elapsed_time = datetime.now() - validation_start
+                            hours = elapsed_time.total_seconds() / 3600
+                            if validate_duration and elapsed_time > validate_duration:
+                                break
+                            print(f'\rValidating file {os.path.basename(filename)}, batch {index}, time taken {hours:.2f} hr', end='',
+                                  flush=True)
                             fetches_valid = [loss, accuracy, self.logits]
-                            image_batch_val, label_batch_val = self.sess.run([self.images_val, self.labels_val])
                             feed_dict_valid = {self.inputs_pl: image_batch_val,
                                                self.labels_pl: label_batch_val,
                                                self.is_training_pl: True,
@@ -502,23 +578,50 @@ class SegNet:
                             # the weight!
                             _loss, _acc, _val_pred = self.sess.run(fetches_valid, feed_dict_valid)
                             _val_loss.append(_loss)
+                            # if index % 100 == 0:
+                            # for i in range(_val_pred.shape[0]):
+                            #     img = _val_pred[i]
+                            #     self._save_img(i, img, index, 'test_output')
+                            # for i in range(label_batch_val.shape[0]):
+                            #     img = label_batch_val[i]
+                            #     one_hot_img = np.eye(13)[img.reshape([img.shape[0], img.shape[1]])]
+                            #     self._save_img(i, one_hot_img, index, 'label')
+
+                            for i in range(_val_pred.shape[0]):
+                                expected = label_batch_val[i].reshape(label_batch_val[i].shape[:2])
+                                actual = predicted_value_to_image(_val_pred[i]).reshape(_val_pred[i].shape[:2])
+                                miou = get_mIoU(expected, actual)
+                                csi = get_csi(expected, actual)
+                                per_file_miou.append(miou)
+                                per_file_csi.append(csi)
+
                             _val_acc.append(_acc)
                             hist += get_hist(_val_pred, label_batch_val)
+                        if per_file_csi:
+                            avg = sum(per_file_csi) / len(per_file_csi)
+                            csv_writer.writerow({
+                                'Filename': os.path.basename(filename),
+                                'Best match': max(per_file_csi),
+                                "Worst match": min(per_file_csi),
+                                "Average match": avg,
+                                "Total frames": len(per_file_csi),
+                                "Median": sorted(per_file_csi)[len(per_file_csi) // 2],
+                                "Stddev": sum((i - avg) ** 2 for i in per_file_csi) / len(per_file_csi),
+                                "Average mIoU": sum(per_file_miou) / len(per_file_miou),
+                                "Sex": 'M' if is_male_file(filename) else 'F'
+                            })
 
-                        print_hist_summary(hist)
+                print_hist_summary(hist)
 
-                        self.val_loss.append(np.mean(_val_loss))
-                        self.val_acc.append(np.mean(_val_acc))
-
-                        print(
-                            "Iteration {}: Train Loss {:6.3f}, Train Acc {:6.3f}, Val Loss {:6.3f}, Val Acc {:6.3f}".format(
-                                step, self.train_loss[-1], self.train_accuracy[-1], self.val_loss[-1],
-                                self.val_acc[-1]))
-
-                    if step != 0 and step % len(image_filename) == 0:
-                        self.save()
+                self.val_loss.append(np.mean(_val_loss))
+                self.val_acc.append(np.mean(_val_acc))
                 coord.request_stop()
                 coord.join(threads)
+
+    def _save_img(self, i, img, index, prefix):
+        raw_data = predicted_value_to_image(img)
+        image_data = (raw_data * 255).astype('uint16')
+        imsave(os.path.join('segnet_images', f"{prefix}_{index}_{i}.png"), image_data, check_contrast=False)
 
     def visual_results(self, dataset_type="TEST", images_index=3, FLAG_MAX_VOTE=False):
 
@@ -834,3 +937,39 @@ class SegNet:
                 path = self.saver.save(self.sess, checkpoint_path, global_step=self.model_version)
                 print(f'Saved model to {path}')
                 self.model_version += 1
+
+
+def predicted_value_to_image(predicted):
+    return (np.argmax(predicted, axis=2) == 1).astype(int)
+
+
+def get_mIoU(img1: np.ndarray, img2: np.ndarray) -> float:
+    i = get_intersection(img1, img2)
+    u = get_union(img1, img2)
+    if u == 0:
+        return 0.0
+    return i / u
+
+
+def get_csi(img1: np.ndarray, img2: np.ndarray) -> float:
+    i = get_intersection(img1, img2)
+    img1_positives = np.count_nonzero(img1 == 1)
+    img2_positives = np.count_nonzero(img2 == 1)
+    if img1_positives == 0 or img2_positives == 0:
+        return 0.0
+    return (i / img1_positives) * (i / img2_positives)
+
+
+def get_intersection(img1: np.ndarray, img2: np.ndarray) -> float:
+    return _get_logical_op_result(img1, img2, np.logical_and)
+
+
+def get_union(img1, img2) -> float:
+    return _get_logical_op_result(img1, img2, np.logical_or)
+
+
+def _get_logical_op_result(img1: np.ndarray, img2: np.ndarray, operation) -> float:
+    img1_bool = img1.astype('bool')
+    img2_bool = img2.astype('bool')
+    product = operation(img1_bool, img2_bool)
+    return np.count_nonzero(product == True)
