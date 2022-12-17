@@ -1,3 +1,4 @@
 *.lock
 tensorboard_logs/
 segnet_ryselis/
+segnet_images/

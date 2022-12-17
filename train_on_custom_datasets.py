@@ -1,3 +1,5 @@
+from datetime import timedelta
+
 from SegNet import SegNet, SegNetCompatModel
 
 if __name__ == '__main__':
@@ -8,5 +10,5 @@ if __name__ == '__main__':
     # model.save()
     model = SegNet()
     model.restore()
-    model.train(batch_size=2)
+    model.train(batch_size=2, max_steps=50000, train_duration=timedelta(hours=3.3))
     model.save()

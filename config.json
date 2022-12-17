@@ -10,7 +10,7 @@
   "INPUT_HEIGHT": 360,
   "INPUT_WIDTH": 480,
   "INPUT_CHANNELS": 3,
-  "NUM_CLASSES": 12,
+  "NUM_CLASSES": 2,
   "USE_VGG": false,
   "VGG_FILE": "vgg16.npy",
   "TB_LOGS": "tensorboard_logs",
